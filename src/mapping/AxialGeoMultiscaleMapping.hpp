@@ -34,18 +34,23 @@ public:
     UNIFORM,
     PARABOLIC
   };
+  enum struct MultiscaleDimension {
+    D1D3,
+    D2D3
+  };
 
   /**
    * @brief Constructor.
    *
    * @param[in] constraint Specifies mapping to be consistent or conservative.
    * @param[in] dimensions Dimensionality of the meshes
+   * @param[in] dimension Dimensionality pairing of the mapping
    * @param[in] type Geometric multiscale type of the mapping
    * @param[in] axis Main axis along which axial geometric multiscale coupling happens
    * @param[in] radius Radius of the 1D solver "tube"
    * @param[in] profile Profile for SPREAD (ignored for COLLECT).
    */
-  AxialGeoMultiscaleMapping(Constraint constraint, int dimensions, MultiscaleType type, MultiscaleAxis axis, double radius, SpreadProfile profile = SpreadProfile::UNIFORM);
+  AxialGeoMultiscaleMapping(Constraint constraint, int dimensions, MultiscaleDimension dimension, MultiscaleType type, MultiscaleAxis axis, double radius, SpreadProfile profile = SpreadProfile::UNIFORM);
 
   /// Takes care of compute-heavy operations needed only once to set up the mapping.
   void computeMapping() override;
@@ -68,6 +73,9 @@ protected:
 
 private:
   mutable logging::Logger _log{"mapping::AxialGeoMultiscaleMapping"};
+
+  // dimensionality of mapping, namely 1D-3D or 2D-3D
+  MultiscaleDimension _dimension;
 
   /// type of mapping, namely spread or collect
   MultiscaleType _type;

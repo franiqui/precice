@@ -5,13 +5,15 @@
 namespace precice::mapping {
 
 AxialGeoMultiscaleMapping::AxialGeoMultiscaleMapping(
-    Constraint     constraint,
-    int            dimensions,
-    MultiscaleType type,
-    MultiscaleAxis axis,
-    double         radius,
-    SpreadProfile  profile)
+    Constraint          constraint,
+    int                 dimensions,
+    MultiscaleDimension dimension,
+    MultiscaleType      type,
+    MultiscaleAxis      axis,
+    double              radius,
+    SpreadProfile       profile)
     : Mapping(constraint, dimensions, false, Mapping::InitialGuessRequirement::None),
+      _dimension(dimension),
       _type(type),
       _axis(axis),
       _radius(radius),
