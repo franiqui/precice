@@ -251,6 +251,9 @@ MappingConfiguration::MappingConfiguration(
                                             .setDocumentation("Profile when spreading from 1D to 3D: 'uniform' or 'parabolic'")
                                             .setOptions({GEOMETRIC_MULTISCALE_SPREAD_UNIFORM, GEOMETRIC_MULTISCALE_SPREAD_PARABOLIC})
                                             .setDefaultValue(GEOMETRIC_MULTISCALE_SPREAD_UNIFORM);
+  auto attrGeoMultiscaleDimension = XMLAttribute<std::string>(ATTR_GEOMETRIC_MULTISCALE_DIMENSION)
+                                        .setDocumentation("Specifies the dimensionality pairing used in geometric multiscale mapping. Options: '1D-3D' or '2D-3D'.")
+                                        .setOptions({GEOMETRIC_MULTISCALE_DIMENSION_1D3D, GEOMETRIC_MULTISCALE_DIMENSION_2D3D});
 
   // Add the relevant attributes to the relevant tags
   addAttributes(projectionTags, {attrFromMesh, attrToMesh, attrDirection, attrConstraint});
@@ -258,7 +261,7 @@ MappingConfiguration::MappingConfiguration(
   addAttributes(rbfIterativeTags, {attrFromMesh, attrToMesh, attrDirection, attrConstraint, attrPolynomial, attrXDead, attrYDead, attrZDead, attrSolverRtol});
   addAttributes(pumDirectTags, {attrFromMesh, attrToMesh, attrDirection, attrConstraint, attrPumPolynomial, verticesPerCluster, relativeOverlap, projectToInput});
   addAttributes(rbfAliasTag, {attrFromMesh, attrToMesh, attrDirection, attrConstraint, attrXDead, attrYDead, attrZDead});
-  addAttributes(geoMultiscaleTags, {attrFromMesh, attrToMesh, attrDirection, attrConstraint, attrGeoMultiscaleType, attrGeoMultiscaleAxis, attrGeoMultiscaleRadius, attrGeoMultiscaleSpreadProfile});
+  addAttributes(geoMultiscaleTags, {attrFromMesh, attrToMesh, attrDirection, attrConstraint, attrGeoMultiscaleType, attrGeoMultiscaleAxis, attrGeoMultiscaleRadius, attrGeoMultiscaleSpreadProfile, attrGeoMultiscaleDimension});
 
   // Now we take care of the subtag executor. We repeat some of the subtags in order to add individual documentation
   XMLTag::Occurrence once = XMLTag::OCCUR_NOT_OR_ONCE;
@@ -410,10 +413,11 @@ void MappingConfiguration::xmlTagCallback(
     std::string strPolynomial = tag.getStringAttributeValue(ATTR_POLYNOMIAL, POLYNOMIAL_SEPARATE);
 
     // geometric multiscale related tags
-    std::string geoMultiscaleType = tag.getStringAttributeValue(ATTR_GEOMETRIC_MULTISCALE_TYPE, "");
-    std::string geoMultiscaleAxis = tag.getStringAttributeValue(ATTR_GEOMETRIC_MULTISCALE_AXIS, "");
-    double      multiscaleRadius  = tag.getDoubleAttributeValue(ATTR_GEOMETRIC_MULTISCALE_RADIUS, 1.0);
-    std::string spreadProfileStr  = tag.getStringAttributeValue(ATTR_GEOMETRIC_MULTISCALE_SPREAD_PROFILE, "");
+    std::string geoMultiscaleType      = tag.getStringAttributeValue(ATTR_GEOMETRIC_MULTISCALE_TYPE, "");
+    std::string geoMultiscaleAxis      = tag.getStringAttributeValue(ATTR_GEOMETRIC_MULTISCALE_AXIS, "");
+    double      multiscaleRadius       = tag.getDoubleAttributeValue(ATTR_GEOMETRIC_MULTISCALE_RADIUS, 1.0);
+    std::string spreadProfileStr       = tag.getStringAttributeValue(ATTR_GEOMETRIC_MULTISCALE_SPREAD_PROFILE, "");
+    std::string geoMultiscaleDimension = tag.getStringAttributeValue(ATTR_GEOMETRIC_MULTISCALE_DIMENSION, "");
 
     if (type == TYPE_AXIAL_GEOMETRIC_MULTISCALE || type == TYPE_RADIAL_GEOMETRIC_MULTISCALE) {
       PRECICE_CHECK(_experimental, "Axial geometric multiscale is experimental and the configuration can change between minor releases. Set experimental=\"on\" in the precice-configuration tag.");
@@ -445,7 +449,7 @@ void MappingConfiguration::xmlTagCallback(
       PRECICE_UNREACHABLE("Unknown mapping constraint \"{}\".", constraint);
     }
 
-    ConfiguredMapping configuredMapping = createMapping(dir, type, fromMesh, toMesh, geoMultiscaleType, geoMultiscaleAxis, multiscaleRadius, spreadProfileStr);
+    ConfiguredMapping configuredMapping = createMapping(dir, type, fromMesh, toMesh, geoMultiscaleType, geoMultiscaleAxis, multiscaleRadius, spreadProfileStr, geoMultiscaleDimension);
 
     _rbfConfig = configureRBFMapping(type, strPolynomial, xDead, yDead, zDead, solverRtol, verticesPerCluster, relativeOverlap, projectToInput);
 
@@ -545,14 +549,14 @@ MappingConfiguration::RBFConfiguration MappingConfiguration::configureRBFMapping
 }
 
 MappingConfiguration::ConfiguredMapping MappingConfiguration::createMapping(
-    const std::string &direction,
-    const std::string &type,
-    const std::string &fromMeshName,
-    const std::string &toMeshName,
-    const std::string &geoMultiscaleType,
-    const std::string &geoMultiscaleAxis,
-    const double      &multiscaleRadius,
-    const std::string &spreadProfileStr) const
+    const std::string                        &direction,
+    const std::string                        &type,
+    const std::string                        &fromMeshName,
+    const std::string                        &toMeshName,
+    const std::string                        &geoMultiscaleType,
+    const std::string                        &geoMultiscaleAxis,
+    const double                             &multiscaleRadius,
+    const std::string &spreadProfileStr const std::string &geoMultiscaleDimension) const
 {
   PRECICE_TRACE(direction, type);
 
@@ -664,7 +668,16 @@ MappingConfiguration::ConfiguredMapping MappingConfiguration::createMapping(
       }
     }
 
-    configuredMapping.mapping = PtrMapping(new AxialGeoMultiscaleMapping(constraintValue, fromMesh->getDimensions(), multiscaleType, multiscaleAxis, multiscaleRadius, spreadProfile));
+    AxialGeoMultiscaleMapping::MultiscaleDimension multiscaleDimension;
+    if (geoMultiscaleDimension == "1D-3D") {
+      multiscaleDimension = AxialGeoMultiscaleMapping::MultiscaleDimension::1D3D;
+    } else if (geoMultiscaleDimension == "2D-3D") {
+      multiscaleDimension = AxialGeoMultiscaleMapping::MultiscaleDimension::2D3D;
+    } else {
+      PRECICE_UNREACHABLE("Unknown dimension \"{}\".", geoMultiscaleDimension);
+    }
+
+    configuredMapping.mapping = PtrMapping(new AxialGeoMultiscaleMapping(constraintValue, fromMesh->getDimensions(), multiscaleType, multiscaleAxis, multiscaleRadius, spreadProfile, multiscaleDimension));
 
   } else if (type == TYPE_RADIAL_GEOMETRIC_MULTISCALE) {
 

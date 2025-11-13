@@ -196,6 +196,7 @@ private:
   const std::string ATTR_GEOMETRIC_MULTISCALE_AXIS           = "multiscale-axis";
   const std::string ATTR_GEOMETRIC_MULTISCALE_RADIUS         = "multiscale-radius";
   const std::string ATTR_GEOMETRIC_MULTISCALE_SPREAD_PROFILE = "multiscale-spread-profile";
+  const std::string ATTR_GEOMETRIC_MULTISCALE_DIMENSION      = "multiscale-dimension";
   const std::string GEOMETRIC_MULTISCALE_TYPE_SPREAD         = "spread";
   const std::string GEOMETRIC_MULTISCALE_TYPE_COLLECT        = "collect";
   const std::string GEOMETRIC_MULTISCALE_AXIS_X              = "x";
@@ -203,6 +204,8 @@ private:
   const std::string GEOMETRIC_MULTISCALE_AXIS_Z              = "z";
   const std::string GEOMETRIC_MULTISCALE_SPREAD_PARABOLIC    = "parabolic";
   const std::string GEOMETRIC_MULTISCALE_SPREAD_UNIFORM      = "uniform";
+  const std::string GEOMETRIC_MULTISCALE_DIMENSION_1D3D      = "1D-3D";
+  const std::string GEOMETRIC_MULTISCALE_DIMENSION_2D3D      = "2D-3D";
 
   // For iterative RBFs using Ginkgo
   const std::string SUBTAG_EXECUTOR = "executor";
@@ -260,14 +263,14 @@ private:
    * subtag information.
    */
   ConfiguredMapping createMapping(
-      const std::string &direction,
-      const std::string &type,
-      const std::string &fromMeshName,
-      const std::string &toMeshName,
-      const std::string &geoMultiscaleType,
-      const std::string &geoMultiscaleAxis,
-      const double      &multiscaleRadius,
-      const std::string &spreadProfileStr) const;
+      const std::string                        &direction,
+      const std::string                        &type,
+      const std::string                        &fromMeshName,
+      const std::string                        &toMeshName,
+      const std::string                        &geoMultiscaleType,
+      const std::string                        &geoMultiscaleAxis,
+      const double                             &multiscaleRadius,
+      const std::string &spreadProfileStr const std::string &geoMultiscaleDimension) const;
 
   /**
    * Stores additional information about the requested RBF mapping such as the
