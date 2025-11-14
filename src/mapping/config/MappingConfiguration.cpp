@@ -650,9 +650,9 @@ MappingConfiguration::ConfiguredMapping MappingConfiguration::createMapping(
     }
 
     AxialGeoMultiscaleMapping::MultiscaleDimension multiscaleDimension;
-    if (geoMultiscaleDimension == "1D-3D") {
+    if (geoMultiscaleDimension == "1d-3d") {
       multiscaleDimension = AxialGeoMultiscaleMapping::MultiscaleDimension::D1D3;
-    } else if (geoMultiscaleDimension == "2D-3D") {
+    } else if (geoMultiscaleDimension == "2d-3d") {
       multiscaleDimension = AxialGeoMultiscaleMapping::MultiscaleDimension::D2D3;
     } else {
       PRECICE_UNREACHABLE("Unknown dimension \"{}\".", geoMultiscaleDimension);

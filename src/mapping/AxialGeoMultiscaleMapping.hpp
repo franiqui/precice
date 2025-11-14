@@ -97,6 +97,9 @@ private:
 
   // band of nearest output vertices to input vertex
   std::vector<std::vector<int>> _collectBands;
+
+  // Maximum distance of output vertices to each input vertex
+  std::vector<double> _maxDistancePerInput;
 };
 
 } // namespace precice::mapping

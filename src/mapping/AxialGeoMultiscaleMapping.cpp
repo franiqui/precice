@@ -74,21 +74,30 @@ void AxialGeoMultiscaleMapping::computeMapping()
         PRECICE_CHECK(input()->nVertices() > 1, "You can only define an axial geometric multiscale 2D-3D mapping of type spread from a mesh with more than 1 vertex.");
         _nearestVertex.clear();
         _nearestVertex.reserve(output()->nVertices());
+        _vertexDistances.clear();
+        _vertexDistances.reserve(output()->nVertices());
+        _maxDistancePerInput.clear();
+        _maxDistancePerInput.resize(input()->nVertices(), 0.0);
         for (size_t j = 0; j < outSize; j++) {
-          const Eigen::VectorXd &xOut         = output()->vertex(j).getCoords();
-          double                 bestDistance = std::numeric_limits<double>::max();
-          int                    bestIdx      = -1;
+          const Eigen::VectorXd &xOut          = output()->vertex(j).getCoords();
+          double                 bestDistance2 = std::numeric_limits<double>::max();
+          int                    bestIdx       = -1;
           for (size_t i = 0; i < inSize; i++) {
             const Eigen::VectorXd &xIn        = input()->vertex(i).getCoords();
             Eigen::VectorXd        difference = xOut - xIn;
-            double                 distance   = difference.squaredNorm();
-            if (distance < bestDistance) {
-              bestDistance = distance;
-              bestIdx      = static_cast<int>(i);
+            double                 distance2  = difference.squaredNorm();
+            if (distance2 < bestDistance2) {
+              bestDistance2 = distance2;
+              bestIdx       = static_cast<int>(i);
             }
           }
           PRECICE_ASSERT(bestIdx >= 0, "Could not find nearest input vertex for output vertex {}", j);
           _nearestVertex.push_back(bestIdx);
+          double distance = std::sqrt(bestDistance2);
+          _vertexDistances.push_back(distance);
+          if (distance > _maxDistancePerInput[static_cast<size_t>(bestIdx)]) {
+            _maxDistancePerInput[static_cast<size_t>(bestIdx)] = distance;
+          }
         }
       }
     } else {
@@ -194,12 +203,19 @@ void AxialGeoMultiscaleMapping::mapConsistent(const time::Sample &inData, Eigen:
     } else {
       PRECICE_ASSERT(_dimension == MultiscaleDimension::D2D3);
       PRECICE_ASSERT(_nearestVertex.size() == outSize);
+      PRECICE_ASSERT(_vertexDistances.size() == outSize);
+      PRECICE_ASSERT(_maxDistancePerInput.size() == inSize);
       for (size_t i = 0; i < outSize; i++) {
         PRECICE_ASSERT(_nearestVertex[i] >= 0 && static_cast<size_t>(_nearestVertex[i]) < inSize, _nearestVertex[i], inSize);
         PRECICE_ASSERT(static_cast<size_t>((i * outDataDimensions) + effectiveCoordinate) < static_cast<size_t>(outputValues.size()), (i * outDataDimensions) + effectiveCoordinate, outputValues.size());
         PRECICE_ASSERT(static_cast<size_t>((static_cast<size_t>(_nearestVertex[i]) * inDataDimensions) + effectiveCoordinate) < static_cast<size_t>(inputValues.size()), (static_cast<size_t>(_nearestVertex[i]) * inDataDimensions) + effectiveCoordinate, inputValues.size());
-
-        outputValues((i * outDataDimensions) + effectiveCoordinate) = inputValues((static_cast<size_t>(_nearestVertex[i]) * inDataDimensions) + effectiveCoordinate);
+        double R = _maxDistancePerInput[static_cast<size_t>(_nearestVertex[i])];
+        if (_profile == SpreadProfile::UNIFORM) {
+          outputValues((i * outDataDimensions) + effectiveCoordinate) = inputValues((static_cast<size_t>(_nearestVertex[i]) * inDataDimensions) + effectiveCoordinate);
+        } else if (_profile == SpreadProfile::PARABOLIC) {
+          double r_hat                                                = _vertexDistances[i] / R;
+          outputValues((i * outDataDimensions) + effectiveCoordinate) = (4.0 / 3.0) * inputValues((static_cast<size_t>(_nearestVertex[i]) * inDataDimensions) + effectiveCoordinate) * (1.0 - r_hat * r_hat);
+        }
       }
     }
   } else {
