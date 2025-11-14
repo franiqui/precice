@@ -91,6 +91,12 @@ private:
 
   /// computed vertex distances to map data from input vertex to output vertices
   std::vector<double> _vertexDistances;
+
+  // nearest input vertex to output vertices
+  std::vector<int> _nearestVertex;
+
+  // band of nearest output vertices to input vertex
+  std::vector<std::vector<int>> _collectBands;
 };
 
 } // namespace precice::mapping
