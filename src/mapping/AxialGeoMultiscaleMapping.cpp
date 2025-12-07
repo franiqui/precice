@@ -41,8 +41,8 @@ void AxialGeoMultiscaleMapping::computeMapping()
                      "Unknown multiscale axis type.");
       size_t const inSize  = input()->nVertices();
       size_t const outSize = output()->nVertices();
-      if (_dimension == MultiscaleDimension::D1D3) {
-        PRECICE_CHECK(input()->nVertices() == 1, "You can only define an axial geometric multiscale 1D-3D mapping of type spread from a mesh with exactly one vertex.");
+      if (_dimension == MultiscaleDimension::D1D3 || _dimension == MultiscaleDimension::D1D2) {
+        PRECICE_CHECK(input()->nVertices() == 1, "You can only define an axial geometric multiscale 1D-{} mapping of type spread from a mesh with exactly one vertex.");
 
         /* When we add support for 1D meshes (https://github.com/precice/precice/issues/1669),
           we should check for valid dimensions combination.
@@ -105,8 +105,96 @@ void AxialGeoMultiscaleMapping::computeMapping()
       size_t const inSize  = input()->nVertices();
       size_t const outSize = output()->nVertices();
       if (_dimension == MultiscaleDimension::D1D3) {
-        PRECICE_CHECK(output()->nVertices() == 1, "You can only define an axial geometric multiscale 1D-3D mapping of type collect to a mesh with exactly one vertex.");
+        PRECICE_CHECK(output()->nVertices() == 1, "You can only define an axial geometric multiscale 1D-{} mapping of type collect to a mesh with exactly one vertex.");
         // Nothing to do here: A consistent collect mapping only averages all the values, independently of their locations, and this is done in the mapConsistent() method.
+      } else if (_dimension == MultiscaleDimension::D1D2) {
+        PRECICE_CHECK(output()->nVertices() == 1,
+                      "You can only define an axial geometric multiscale 1D-2D mapping of type collect to a mesh with exactly one vertex.");
+        _collectWeights.clear();
+        _collectWeights.resize(inSize, 0.0);
+
+        // Trivial case: only one vertex → full weight
+        if (inSize == 1) {
+          _collectWeights[0] = 1.0;
+        } else {
+          // --- 1) Read all coordinates of the 2D interface vertices ---
+          std::vector<Eigen::VectorXd> coords(inSize);
+          for (size_t i = 0; i < inSize; ++i) {
+            coords[i] = input()->vertex(i).getCoords();
+          }
+
+          // --- 2) Detect main tangential direction (largest span) ---
+          // We assume a straight line interface aligned with the axis
+          // of largest extent in the global coordinates.
+          int             dim      = coords[0].size();
+          Eigen::VectorXd minCoord = coords[0];
+          Eigen::VectorXd maxCoord = coords[0];
+          for (size_t i = 1; i < inSize; ++i) {
+            minCoord = minCoord.cwiseMin(coords[i]);
+            maxCoord = maxCoord.cwiseMax(coords[i]);
+          }
+
+          int    mainDir = 0;
+          double maxSpan = std::abs(maxCoord[0] - minCoord[0]);
+          for (int d = 1; d < dim; ++d) {
+            double span = std::abs(maxCoord[d] - minCoord[d]);
+            if (span > maxSpan) {
+              maxSpan = span;
+              mainDir = d;
+            }
+          }
+
+          // --- 3) Build a sorted index along this direction ---
+          std::vector<size_t> indices(inSize);
+          for (size_t i = 0; i < inSize; ++i) {
+            indices[i] = i;
+          }
+          std::sort(indices.begin(), indices.end(),
+                    [&](size_t a, size_t b) {
+                      return coords[a][mainDir] < coords[b][mainDir];
+                    });
+
+          // --- 4) Compute length-based weights (midpoint rule) ---
+          // For non-uniform spacing along the line:
+          //   Δs_0     = (s_1     - s_0    ) / 2
+          //   Δs_k     = (s_{k+1} - s_{k-1}) / 2,  0 < k < N-1
+          //   Δs_{N-1} = (s_{N-1} - s_{N-2}) / 2
+          std::vector<double> s(inSize);
+          for (size_t k = 0; k < inSize; ++k) {
+            s[k] = coords[indices[k]][mainDir];
+          }
+
+          std::vector<double> localWeights(inSize, 0.0);
+          // first
+          localWeights[0] = 0.5 * (s[1] - s[0]);
+          // interior
+          for (size_t k = 1; k < inSize - 1; ++k) {
+            localWeights[k] = 0.5 * (s[k + 1] - s[k - 1]);
+          }
+          // last
+          localWeights[inSize - 1] = 0.5 * (s[inSize - 1] - s[inSize - 2]);
+
+          // --- 5) Map back to original vertex indices and normalize ---
+          double totalLength = 0.0;
+          for (size_t k = 0; k < inSize; ++k) {
+            size_t originalIdx           = indices[k];
+            double w                     = std::max(localWeights[k], 0.0); // guard against tiny negative due to round-off
+            _collectWeights[originalIdx] = w;
+            totalLength += w;
+          }
+
+          if (totalLength > 0.0) {
+            for (size_t i = 0; i < inSize; ++i) {
+              _collectWeights[i] /= totalLength;
+            }
+          } else {
+            // Fallback: uniform weights if something went wrong
+            double w = 1.0 / static_cast<double>(inSize);
+            for (size_t i = 0; i < inSize; ++i) {
+              _collectWeights[i] = w;
+            }
+          }
+        }
       } else {
         PRECICE_ASSERT(_dimension == MultiscaleDimension::D2D3);
         PRECICE_CHECK(outSize > 1, "You can only define an axial geometric multiscale 2D-3D mapping of type collect to a mesh with more than 1 vertex.");
@@ -189,13 +277,14 @@ void AxialGeoMultiscaleMapping::mapConsistent(const time::Sample &inData, Eigen:
   if (_type == MultiscaleType::SPREAD) {
     size_t const inSize  = input()->nVertices();
     size_t const outSize = output()->nVertices();
-    if (_dimension == MultiscaleDimension::D1D3) {
+    if (_dimension == MultiscaleDimension::D1D3 || _dimension == MultiscaleDimension::D1D2) {
       PRECICE_ASSERT(input()->nVertices() == 1);
       for (size_t i = 0; i < outSize; i++) {
         PRECICE_ASSERT(static_cast<size_t>((i * outDataDimensions) + effectiveCoordinate) < static_cast<size_t>(outputValues.size()), ((i * outDataDimensions) + effectiveCoordinate), outputValues.size());
         if (_profile == SpreadProfile::PARABOLIC) {
           // When adding support for 2D, remember that this should be 1.5 * inputValues(effectiveCoordinate) * (1 - (_vertexDistances[i] * _vertexDistances[i]));
-          outputValues((i * outDataDimensions) + effectiveCoordinate) = 2 * inputValues(effectiveCoordinate) * (1 - (_vertexDistances[i] * _vertexDistances[i]));
+          const double factor                                         = (_dimension == MultiscaleDimension::D1D3) ? 2.0 : 1.5;
+          outputValues((i * outDataDimensions) + effectiveCoordinate) = factor * inputValues(effectiveCoordinate) * (1 - (_vertexDistances[i] * _vertexDistances[i]));
         } else if (_profile == SpreadProfile::UNIFORM) {
           outputValues((i * outDataDimensions) + effectiveCoordinate) = inputValues(effectiveCoordinate);
         }
@@ -231,6 +320,16 @@ void AxialGeoMultiscaleMapping::mapConsistent(const time::Sample &inData, Eigen:
         outputValues(effectiveCoordinate) += inputValues((i * inDataDimensions) + effectiveCoordinate);
       }
       outputValues(effectiveCoordinate) = outputValues(effectiveCoordinate) / inSize;
+    } else if (_dimension == MultiscaleDimension::D1D2) {
+      PRECICE_ASSERT(output()->nVertices() == 1);
+      PRECICE_ASSERT(_collectWeights.size() == inSize);
+      outputValues(effectiveCoordinate) = 0.0;
+      for (size_t i = 0; i < inSize; ++i) {
+        PRECICE_ASSERT(static_cast<size_t>((i * inDataDimensions) + effectiveCoordinate) < static_cast<size_t>(inputValues.size()),
+                       ((i * inDataDimensions) + effectiveCoordinate), inputValues.size());
+        outputValues(effectiveCoordinate) += _collectWeights[i] * inputValues((i * inDataDimensions) + effectiveCoordinate);
+      }
+      // _collectWeights already sum to 1, so no further normalization
     } else {
       PRECICE_ASSERT(_dimension == MultiscaleDimension::D2D3);
       PRECICE_ASSERT(_collectBands.size() == output()->nVertices());

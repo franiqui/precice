@@ -240,8 +240,8 @@ MappingConfiguration::MappingConfiguration(
                             .setDocumentation("If enabled, places the cluster centers at the closest vertex of the input mesh. Should be enabled in case of non-uniform point distributions such as for shell structures.");
 
   auto attrGeoMultiscaleDimension = XMLAttribute<std::string>(ATTR_GEOMETRIC_MULTISCALE_DIMENSION)
-                                        .setDocumentation("Specifies the dimensionality pairing used in geometric multiscale mapping. Options: '1D-3D' or '2D-3D'.")
-                                        .setOptions({GEOMETRIC_MULTISCALE_DIMENSION_1D3D, GEOMETRIC_MULTISCALE_DIMENSION_2D3D});
+                                        .setDocumentation("Specifies the dimensionality pairing used in geometric multiscale mapping. Options: '1D-3D', '1D-2D' or '2D-3D'.")
+                                        .setOptions({GEOMETRIC_MULTISCALE_DIMENSION_1D3D, GEOMETRIC_MULTISCALE_DIMENSION_1D2D, GEOMETRIC_MULTISCALE_DIMENSION_2D3D});
   auto attrGeoMultiscaleType = XMLAttribute<std::string>(ATTR_GEOMETRIC_MULTISCALE_TYPE)
                                    .setDocumentation("Type of geometric multiscale mapping. Either 'spread' or 'collect'.")
                                    .setOptions({GEOMETRIC_MULTISCALE_TYPE_SPREAD, GEOMETRIC_MULTISCALE_TYPE_COLLECT});
@@ -249,9 +249,9 @@ MappingConfiguration::MappingConfiguration(
                                    .setDocumentation("Principle axis along which geometric multiscale mapping is performed.")
                                    .setOptions({GEOMETRIC_MULTISCALE_AXIS_X, GEOMETRIC_MULTISCALE_AXIS_Y, GEOMETRIC_MULTISCALE_AXIS_Z});
   auto attrGeoMultiscaleRadius = XMLAttribute<double>(ATTR_GEOMETRIC_MULTISCALE_RADIUS)
-                                     .setDocumentation("Radius of the circular interface between the 1D and 3D participant.");
+                                     .setDocumentation("Radius of the circular interface between the participants.");
   auto attrGeoMultiscaleSpreadProfile = XMLAttribute<std::string>(ATTR_GEOMETRIC_MULTISCALE_SPREAD_PROFILE)
-                                            .setDocumentation("Profile when spreading from 1D to 3D: 'uniform' or 'parabolic'")
+                                            .setDocumentation("Profile when spreading between participants: 'uniform' or 'parabolic'")
                                             .setOptions({GEOMETRIC_MULTISCALE_SPREAD_UNIFORM, GEOMETRIC_MULTISCALE_SPREAD_PARABOLIC})
                                             .setDefaultValue(GEOMETRIC_MULTISCALE_SPREAD_UNIFORM);
 
@@ -652,6 +652,8 @@ MappingConfiguration::ConfiguredMapping MappingConfiguration::createMapping(
     AxialGeoMultiscaleMapping::MultiscaleDimension multiscaleDimension;
     if (geoMultiscaleDimension == "1d-3d") {
       multiscaleDimension = AxialGeoMultiscaleMapping::MultiscaleDimension::D1D3;
+    } else if (geoMultiscaleDimension == "1d-2d") {
+      multiscaleDimension = AxialGeoMultiscaleMapping::MultiscaleDimension::D1D2;
     } else if (geoMultiscaleDimension == "2d-3d") {
       multiscaleDimension = AxialGeoMultiscaleMapping::MultiscaleDimension::D2D3;
     } else {

@@ -36,6 +36,7 @@ public:
   };
   enum struct MultiscaleDimension {
     D1D3,
+    D1D2,
     D2D3
   };
 
@@ -74,7 +75,7 @@ protected:
 private:
   mutable logging::Logger _log{"mapping::AxialGeoMultiscaleMapping"};
 
-  // dimensionality of mapping, namely 1D-3D or 2D-3D
+  // dimensionality of mapping, namely 1D-3D, 1D-2D or 2D-3D
   MultiscaleDimension _dimension;
 
   /// type of mapping, namely spread or collect
@@ -100,6 +101,9 @@ private:
 
   // Maximum distance of output vertices to each input vertex
   std::vector<double> _maxDistancePerInput;
+
+  // Geometry-based weights for consistent COLLECT
+  std::vector<double> _collectWeights;
 };
 
 } // namespace precice::mapping
