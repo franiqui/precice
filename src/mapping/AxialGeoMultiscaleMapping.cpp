@@ -247,6 +247,10 @@ void AxialGeoMultiscaleMapping::mapConsistent(const time::Sample &inData, Eigen:
           outputValues((j * outDataDimensions) + effectiveCoordinate) += inputValues((static_cast<size_t>(i) * inDataDimensions) + effectiveCoordinate);
         }
         outputValues((j * outDataDimensions) + effectiveCoordinate) = outputValues((j * outDataDimensions) + effectiveCoordinate) / static_cast<double>(_collectBands[j].size());
+
+        if (outDataDimensions > 1 && _profile == SpreadProfile::PARABOLIC) {
+          outputValues((j * outDataDimensions) + effectiveCoordinate) *= 9.0 / 8.0;
+        }
       }
     }
   }
