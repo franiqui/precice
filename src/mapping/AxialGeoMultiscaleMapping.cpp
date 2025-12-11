@@ -11,13 +11,15 @@ AxialGeoMultiscaleMapping::AxialGeoMultiscaleMapping(
     MultiscaleType      type,
     MultiscaleAxis      axis,
     double              radius,
-    SpreadProfile       profile)
+    SpreadProfile       profile,
+    double              coreRadius)
     : Mapping(constraint, dimensions, false, Mapping::InitialGuessRequirement::None),
       _dimension(dimension),
       _type(type),
       _axis(axis),
       _radius(radius),
-      _profile(profile)
+      _profile(profile),
+      _coreRadius(coreRadius)
 {
   setInputRequirement(Mapping::MeshRequirement::VERTEX);
   setOutputRequirement(Mapping::MeshRequirement::VERTEX);
@@ -105,8 +107,616 @@ void AxialGeoMultiscaleMapping::computeMapping()
       size_t const inSize  = input()->nVertices();
       size_t const outSize = output()->nVertices();
       if (_dimension == MultiscaleDimension::D1D3) {
-        PRECICE_CHECK(output()->nVertices() == 1, "You can only define an axial geometric multiscale 1D-{} mapping of type collect to a mesh with exactly one vertex.");
-        // Nothing to do here: A consistent collect mapping only averages all the values, independently of their locations, and this is done in the mapConsistent() method.
+        PRECICE_CHECK(outSize == 1,
+                      "You can only define an axial geometric multiscale 1D-3D mappinp of type collect to a mesh with exactly one vertex.");
+        _collectWeights.clear();
+        _collectWeights.resize(inSize, 0.0);
+        // Trivial case: only one vertex → full weight
+        if (inSize == 1) {
+          _collectWeights[0] = 1.0;
+          return;
+        }
+        // ------------------------------------------------------------
+        // 1) Read all coordinates and determine radial plane
+        // ------------------------------------------------------------
+        std::vector<Eigen::VectorXd> coords(inSize);
+        for (size_t i = 0; i < inSize; ++i) {
+          coords[i] = input()->vertex(i).getCoords();
+        }
+
+        int dim = static_cast<int>(coords[0].size());
+        PRECICE_CHECK(dim >= 2,
+                      "1D-3D axial geometric multiscale mapping requires dimension >= 2.");
+
+        // Compute per-dimension spans to identify two "radial" directions
+        Eigen::VectorXd minCoord = coords[0];
+        Eigen::VectorXd maxCoord = coords[0];
+        for (size_t i = 1; i < inSize; ++i) {
+          minCoord = minCoord.cwiseMin(coords[i]);
+          maxCoord = maxCoord.cwiseMax(coords[i]);
+        }
+
+        std::vector<std::pair<double, int>> spans;
+        spans.reserve(dim);
+        for (int d = 0; d < dim; ++d) {
+          double span = std::abs(maxCoord[d] - minCoord[d]);
+          spans.emplace_back(span, d);
+        }
+        std::sort(spans.begin(), spans.end(),
+                  [](auto const &a, auto const &b) { return a.first > b.first; });
+
+        // Take the two directions with the largest span as radial plane
+        int dirX = spans[0].second;
+        int dirY = (dim >= 2) ? spans[1].second : (spans[0].second + 1) % dim;
+
+        // ------------------------------------------------------------
+        // 2) Build r, rho, theta and inner/outer masks
+        // ------------------------------------------------------------
+        std::vector<double> x(inSize), y(inSize), r(inSize), rho(inSize), theta(inSize);
+        double              rMax = 0.0;
+
+        for (size_t i = 0; i < inSize; ++i) {
+          double xi = coords[i][dirX];
+          double yi = coords[i][dirY];
+          x[i]      = xi;
+          y[i]      = yi;
+
+          double ri = std::sqrt(xi * xi + yi * yi);
+          r[i]      = ri;
+          rMax      = std::max(rMax, ri);
+
+          rho[i]   = std::max(std::abs(xi), std::abs(yi)); // "square radius"
+          theta[i] = std::atan2(yi, xi);
+        }
+
+        double            rhoSwitch = _coreRadius;
+        std::vector<bool> isInner(inSize, false);
+        std::vector<bool> isOuter(inSize, false);
+
+        for (size_t i = 0; i < inSize; ++i) {
+          if (rhoSwitch > 0.0 && rho[i] <= rhoSwitch) {
+            isInner[i] = true;
+          } else {
+            isOuter[i] = true;
+          }
+        }
+
+        // Collect indices for inner and outer sets
+        std::vector<size_t> innerIdx, outerIdx;
+        innerIdx.reserve(inSize);
+        outerIdx.reserve(inSize);
+
+        for (size_t i = 0; i < inSize; ++i) {
+          if (isInner[i])
+            innerIdx.push_back(i);
+          else
+            outerIdx.push_back(i);
+        }
+
+        // ------------------------------------------------------------
+        // Helper: cluster 1D coordinates into levels
+        // ------------------------------------------------------------
+        auto cluster_1d =
+            [&](const std::vector<double> &coord,
+                const std::vector<size_t> &subset,
+                const double              *factorOpt, // nullptr → Cartesian mode
+                double                     eps,
+                std::vector<int>          &levelIndex,
+                int                        startLevel) -> int {
+          int    currentLevel = startLevel;
+          size_t nLocal       = subset.size();
+
+          // Case: no nodes to cluster
+          if (nLocal == 0)
+            return startLevel;
+
+          // Build local vector (value, globalIndex) and sort by value
+          std::vector<std::pair<double, size_t>> local;
+          local.reserve(nLocal);
+          for (size_t k = 0; k < nLocal; ++k)
+            local.emplace_back(coord[subset[k]], subset[k]);
+
+          std::sort(local.begin(), local.end(),
+                    [](auto const &a, auto const &b) { return a.first < b.first; });
+
+          // Extract sorted coordinates
+          std::vector<double> vals_sorted(nLocal);
+          for (size_t k = 0; k < nLocal; ++k)
+            vals_sorted[k] = local[k].first;
+
+          // Assign first level
+          levelIndex[local[0].second] = currentLevel;
+
+          // -----------------------------------------------------------------
+          // MODE 1: Cartesian-style → factorOpt == nullptr
+          // -----------------------------------------------------------------
+          if (factorOpt == nullptr) {
+            for (size_t k = 1; k < nLocal; ++k) {
+              if (std::abs(vals_sorted[k] - vals_sorted[k - 1]) > eps)
+                ++currentLevel;
+
+              levelIndex[local[k].second] = currentLevel;
+            }
+            return currentLevel + 1;
+          }
+
+          // -----------------------------------------------------------------
+          // MODE 2: Median-gap clustering → factorOpt != nullptr
+          // -----------------------------------------------------------------
+          double factor = *factorOpt;
+
+          // Compute gaps
+          std::vector<double> d;
+          d.reserve(nLocal > 1 ? nLocal - 1 : 0);
+          for (size_t k = 1; k < nLocal; ++k)
+            d.push_back(vals_sorted[k] - vals_sorted[k - 1]);
+
+          // Collect positive gaps
+          std::vector<double> pos;
+          pos.reserve(d.size());
+          for (double g : d)
+            if (g > eps)
+              pos.push_back(g);
+
+          // No positive gaps → everything is one cluster
+          if (pos.empty()) {
+            for (auto &p : local)
+              levelIndex[p.second] = currentLevel;
+
+            return currentLevel + 1;
+          }
+
+          // Median of positive gaps
+          std::nth_element(pos.begin(), pos.begin() + pos.size() / 2, pos.end());
+          double median_d = pos[pos.size() / 2];
+
+          double threshold = factor * median_d;
+
+          // Ring-style cluster assignment
+          for (size_t k = 1; k < nLocal; ++k) {
+            if (d[k - 1] > threshold)
+              ++currentLevel;
+
+            levelIndex[local[k].second] = currentLevel;
+          }
+
+          return currentLevel + 1;
+        };
+
+        // ------------------------------------------------------------
+        // 3) Inner region: Cartesian bands → area = Δx * Δy
+        // ------------------------------------------------------------
+        const double     EPS_INNER = 1e-1; // same as Python EPS
+        std::vector<int> xLevel(inSize, -1), yLevel(inSize, -1);
+        int              nXLevels = 0, nYLevels = 0;
+        if (!innerIdx.empty()) {
+          std::vector<double> xInner(inSize), yInner(inSize);
+          for (size_t i : innerIdx) {
+            xInner[i] = x[i];
+            yInner[i] = y[i];
+          }
+
+          nXLevels = cluster_1d(xInner, innerIdx, /*factorOpt =*/nullptr, EPS_INNER,
+                                xLevel, /*startLevel=*/0);
+          nYLevels = cluster_1d(yInner, innerIdx, /*factorOpt =*/nullptr, EPS_INNER,
+                                yLevel, /*startLevel=*/0);
+        }
+
+        std::vector<double> deltaX(std::max(1, nXLevels), 0.0);
+        std::vector<double> deltaY(std::max(1, nYLevels), 0.0);
+
+        // Δx per x-level (mimic np.unique + np.diff)
+        for (int L = 0; L < nXLevels; ++L) {
+          std::vector<double> xs;
+          for (size_t i : innerIdx) {
+            if (xLevel[i] == L) {
+              xs.push_back(x[i]);
+            }
+          }
+
+          if (xs.size() <= 1) {
+            deltaX[L] = 0.0;
+            continue;
+          }
+
+          // sort and unique → like np.unique(np.sort(...))
+          std::sort(xs.begin(), xs.end());
+          xs.erase(std::unique(xs.begin(), xs.end()), xs.end());
+
+          if (xs.size() <= 1) {
+            deltaX[L] = 0.0;
+            continue;
+          }
+
+          std::vector<double> dx;
+          dx.reserve(xs.size() - 1);
+          for (size_t k = 1; k < xs.size(); ++k) {
+            dx.push_back(xs[k] - xs[k - 1]);
+          }
+
+          if (dx.size() == 1) {
+            deltaX[L] = dx[0];
+          } else {
+            deltaX[L] = 0.5 * (dx.front() + dx.back());
+          }
+        }
+
+        // Δy per y-level
+        // Δy per y-level (mimic np.unique + np.diff)
+        for (int L = 0; L < nYLevels; ++L) {
+          std::vector<double> ys;
+          for (size_t i : innerIdx) {
+            if (yLevel[i] == L) {
+              ys.push_back(y[i]);
+            }
+          }
+
+          if (ys.size() <= 1) {
+            deltaY[L] = 0.0;
+            continue;
+          }
+
+          // sort and unique → like np.unique(np.sort(...))
+          std::sort(ys.begin(), ys.end());
+          ys.erase(std::unique(ys.begin(), ys.end()), ys.end());
+
+          if (ys.size() <= 1) {
+            deltaY[L] = 0.0;
+            continue;
+          }
+
+          std::vector<double> dy;
+          dy.reserve(ys.size() - 1);
+          for (size_t k = 1; k < ys.size(); ++k) {
+            dy.push_back(ys[k] - ys[k - 1]);
+          }
+
+          if (dy.size() == 1) {
+            deltaY[L] = dy[0];
+          } else {
+            deltaY[L] = 0.5 * (dy.front() + dy.back());
+          }
+        }
+
+        // ------------------------------------------------------------
+        // 4) Outer region: adaptive rings → area = R_j * Δr_j * Δθ_i
+        // ------------------------------------------------------------
+        std::vector<int> ringIndexOuter(inSize, -1);
+
+        // Work only on the outer vertices
+        std::vector<size_t> remaining = outerIdx;
+
+        int          ringId      = 0;
+        int          nRef        = -1;  // reference number of points in first (outermost) ring
+        double       factorOuter = 1.0; // BASE_FACTOR_OUTER
+        const double FACTOR_STEP = 0.2; // how much we increase each time
+        const double MAX_FACTOR  = 5.0;
+        const double EPS_OUTER   = 1e-5;
+
+        while (!remaining.empty()) {
+          // --- cluster r over the remaining nodes with current factorOuter ---
+          std::vector<int> tmpLevels(inSize, -1);
+          // cluster1D uses (coord, subset, factor, eps, levelIndex, startLevel)
+          (void) cluster_1d(r, remaining, &factorOuter, EPS_OUTER, tmpLevels, 0);
+
+          // --- collect which level labels exist inside "remaining" ---
+          std::vector<int> levels;
+          for (size_t idx : remaining) {
+            int  L     = tmpLevels[idx];
+            bool found = false;
+            for (int v : levels) {
+              if (v == L) {
+                found = true;
+                break;
+              }
+            }
+            if (!found) {
+              levels.push_back(L);
+            }
+          }
+
+          // --- find the OUTERMOST group among the remaining ---
+          double bestMeanR  = -1.0;
+          int    outerLabel = -1;
+
+          for (int L : levels) {
+            double sumR = 0.0;
+            int    cnt  = 0;
+            for (size_t idx : remaining) {
+              if (tmpLevels[idx] == L) {
+                sumR += r[idx];
+                ++cnt;
+              }
+            }
+            if (cnt > 0) {
+              double meanR = sumR / static_cast<double>(cnt);
+              if (meanR > bestMeanR) {
+                bestMeanR  = meanR;
+                outerLabel = L;
+              }
+            }
+          }
+
+          // nodes belonging to this outermost ring
+          std::vector<size_t> outerNodes;
+          outerNodes.reserve(remaining.size());
+          for (size_t idx : remaining) {
+            if (tmpLevels[idx] == outerLabel) {
+              outerNodes.push_back(idx);
+            }
+          }
+
+          // --- First ring (outermost) → define reference point-count ---
+          if (nRef < 0) {
+            nRef = static_cast<int>(outerNodes.size());
+            for (size_t idx : outerNodes) {
+              ringIndexOuter[idx] = ringId;
+            }
+            ++ringId;
+
+            // remove these indices from "remaining"
+            std::vector<size_t> newRemaining;
+            newRemaining.reserve(remaining.size());
+            for (size_t idx : remaining) {
+              bool isInOuter = false;
+              for (size_t j : outerNodes) {
+                if (idx == j) {
+                  isInOuter = true;
+                  break;
+                }
+              }
+              if (!isInOuter) {
+                newRemaining.push_back(idx);
+              }
+            }
+            remaining.swap(newRemaining);
+            // keep factorOuter as is
+            continue;
+          }
+
+          // --- Inner rings ---
+          if (static_cast<int>(outerNodes.size()) < nRef && factorOuter < MAX_FACTOR) {
+            // This ring has fewer points than the reference outer ring:
+            // emulate increasing factor_outer from this ring inwards
+            factorOuter += FACTOR_STEP;
+            continue; // re-run clustering on the same "remaining"
+          } else {
+            // Accept this ring (even if still smaller once we hit MAX_FACTOR)
+            for (size_t idx : outerNodes) {
+              ringIndexOuter[idx] = ringId;
+            }
+            ++ringId;
+
+            // remove these indices from "remaining"
+            std::vector<size_t> newRemaining;
+            newRemaining.reserve(remaining.size());
+            for (size_t idx : remaining) {
+              bool isInOuter = false;
+              for (size_t j : outerNodes) {
+                if (idx == j) {
+                  isInOuter = true;
+                  break;
+                }
+              }
+              if (!isInOuter) {
+                newRemaining.push_back(idx);
+              }
+            }
+            remaining.swap(newRemaining);
+            // keep (possibly increased) factorOuter for further inner rings
+            continue;
+          }
+        }
+
+        // Now we have ringIndexOuter filled for all outer nodes
+        int nRings = ringId;
+
+        // Build list of vertices per ring and ring mean radius (like Python)
+        std::vector<std::vector<size_t>> ringVertices(std::max(1, nRings));
+        for (size_t i : outerIdx) {
+          int L = ringIndexOuter[i];
+          if (L >= 0 && L < nRings) {
+            ringVertices[L].push_back(i);
+          }
+        }
+
+        std::vector<double> ringRadius(std::max(1, nRings), 0.0);
+        for (int L = 0; L < nRings; ++L) {
+          double sumR = 0.0;
+          int    cnt  = 0;
+          for (size_t i : ringVertices[L]) {
+            sumR += r[i];
+            ++cnt;
+          }
+          ringRadius[L] = (cnt > 0) ? sumR / static_cast<double>(cnt) : 0.0;
+        }
+
+        // radial thickness per ring: deltaR, exactly like Python
+        std::vector<double> deltaR(std::max(1, nRings), 0.0);
+        if (nRings == 1) {
+          // python: delta_r[0] = r_vals.max() - r_vals.min()
+          double rMin      = std::numeric_limits<double>::max();
+          double rMaxLocal = 0.0;
+          for (size_t i : ringVertices[0]) {
+            rMin      = std::min(rMin, r[i]);
+            rMaxLocal = std::max(rMaxLocal, r[i]);
+          }
+          deltaR[0] = (rMaxLocal - rMin);
+        } else if (nRings > 1) {
+          // sort rings by radius
+          std::vector<int> order(nRings);
+          for (int k = 0; k < nRings; ++k) {
+            order[k] = k;
+          }
+          std::sort(order.begin(), order.end(),
+                    [&](int a, int b) { return ringRadius[a] < ringRadius[b]; });
+
+          std::vector<double> rSorted(nRings);
+          for (int k = 0; k < nRings; ++k) {
+            rSorted[k] = ringRadius[order[k]];
+          }
+          std::vector<double> dRSorted(nRings, 0.0);
+
+          for (int k = 0; k < nRings; ++k) {
+            if (k == 0) {
+              // inner boundary at rhoSwitch, same as Python:
+              // dr_sorted[0] = 0.5 * (r_sorted[1] + r_sorted[0]) - rho_switch
+              double innerRad = (rhoSwitch > 0.0) ? rhoSwitch : rSorted[0];
+              dRSorted[k]     = 0.5 * (rSorted[1] + rSorted[0]) - innerRad;
+            } else if (k == nRings - 1) {
+              dRSorted[k] = 0.5 * (rSorted[nRings - 1] - rSorted[nRings - 2]);
+            } else {
+              dRSorted[k] = 0.5 * (rSorted[k + 1] - rSorted[k - 1]);
+            }
+          }
+
+          // map back to original ring order
+          for (int pos = 0; pos < nRings; ++pos) {
+            int L     = order[pos];
+            deltaR[L] = dRSorted[pos];
+          }
+        }
+
+        // ------------------------------------------------------------
+        // 5) Compute node areas and basic weights
+        // ------------------------------------------------------------
+        std::vector<double> area(inSize, 0.0);
+
+        // Inner: Cartesian Δx * Δy
+        for (size_t i : innerIdx) {
+          int jx = xLevel[i];
+          int jy = yLevel[i];
+          if (jx < 0 || jy < 0)
+            continue;
+          double dx = (jx < nXLevels) ? deltaX[jx] : 0.0;
+          double dy = (jy < nYLevels) ? deltaY[jy] : 0.0;
+          area[i]   = std::max(dx, 0.0) * std::max(dy, 0.0);
+        }
+
+        // Outer: polar R_j * Δr_j * Δθ_i
+        for (int L = 0; L < nRings; ++L) {
+          auto const &ring = ringVertices[L];
+          if (ring.empty())
+            continue;
+
+          // collect angles and sort along ring
+          std::vector<std::pair<double, size_t>> angIdx;
+          angIdx.reserve(ring.size());
+          for (size_t i : ring) {
+            angIdx.emplace_back(theta[i], i);
+          }
+          std::sort(angIdx.begin(), angIdx.end(),
+                    [](auto const &a, auto const &b) { return a.first < b.first; });
+
+          size_t              N = angIdx.size();
+          std::vector<double> thetaU(N);
+          for (size_t k = 0; k < N; ++k) {
+            thetaU[k] = angIdx[k].first;
+          }
+
+          // unwrap
+          for (size_t k = 1; k < N; ++k) {
+            while (thetaU[k] - thetaU[k - 1] > M_PI)
+              thetaU[k] -= 2.0 * M_PI;
+            while (thetaU[k] - thetaU[k - 1] < -M_PI)
+              thetaU[k] += 2.0 * M_PI;
+          }
+
+          std::vector<double> thetaExt(N + 2);
+          thetaExt[0]     = thetaU.back() - 2.0 * M_PI;
+          thetaExt[N + 1] = thetaU.front() + 2.0 * M_PI;
+          for (size_t k = 0; k < N; ++k) {
+            thetaExt[k + 1] = thetaU[k];
+          }
+
+          std::vector<double> dTheta(N, 0.0);
+          for (size_t k = 0; k < N; ++k) {
+            dTheta[k] = 0.5 * (thetaExt[k + 2] - thetaExt[k]);
+          }
+
+          double Rj = ringRadius[L];
+          double dR = std::max(deltaR[L], 0.0);
+          for (size_t k = 0; k < N; ++k) {
+            size_t iNode = angIdx[k].second;
+            area[iNode]  = Rj * dR * std::max(dTheta[k], 0.0);
+          }
+        }
+
+        double totalArea = 0.0;
+        for (double a : area)
+          totalArea += a;
+
+        if (totalArea <= 0.0) {
+          // fallback: uniform weights
+          double w = 1.0 / static_cast<double>(inSize);
+          for (size_t i = 0; i < inSize; ++i) {
+            _collectWeights[i] = w;
+          }
+          return;
+        }
+
+        std::vector<double> w0(inSize, 0.0);
+        for (size_t i = 0; i < inSize; ++i) {
+          w0[i] = area[i] / totalArea;
+        }
+
+        // ------------------------------------------------------------
+        // 6) Optional: 2-moment correction between inner / outer
+        //     to get correct <r^2> for a circular pipe
+        // ------------------------------------------------------------
+        double sInner = 0.0, sOuter = 0.0;
+        double aInner = 0.0, bOuter = 0.0;
+        for (size_t i = 0; i < inSize; ++i) {
+          double wi = w0[i];
+          double r2 = r[i] * r[i];
+          if (isInner[i]) {
+            sInner += wi;
+            aInner += wi * r2;
+          } else {
+            sOuter += wi;
+            bOuter += wi * r2;
+          }
+        }
+
+        double R_eff    = rMax;
+        double targetM2 = 0.5 * R_eff * R_eff;
+
+        double alpha = 1.0;
+        double beta  = 1.0;
+
+        double A11 = sInner;
+        double A12 = sOuter;
+        double A21 = aInner;
+        double A22 = bOuter;
+        double B1  = 1.0;
+        double B2  = targetM2;
+
+        double det = A11 * A22 - A12 * A21;
+        if (std::abs(det) > 1e-14) {
+          alpha = (B1 * A22 - B2 * A12) / det;
+          beta  = (-B1 * A21 + B2 * A11) / det;
+        }
+
+        // Build corrected weights and renormalize
+        double sumW = 0.0;
+        for (size_t i = 0; i < inSize; ++i) {
+          double factor      = isInner[i] ? alpha : beta;
+          _collectWeights[i] = factor * w0[i];
+          sumW += _collectWeights[i];
+        }
+
+        if (sumW > 0.0) {
+          for (size_t i = 0; i < inSize; ++i) {
+            _collectWeights[i] /= sumW;
+          }
+        } else {
+          // fallback: uniform
+          double w = 1.0 / static_cast<double>(inSize);
+          for (size_t i = 0; i < inSize; ++i) {
+            _collectWeights[i] = w;
+          }
+        }
+
       } else if (_dimension == MultiscaleDimension::D1D2) {
         PRECICE_CHECK(output()->nVertices() == 1,
                       "You can only define an axial geometric multiscale 1D-2D mapping of type collect to a mesh with exactly one vertex.");
@@ -311,16 +921,7 @@ void AxialGeoMultiscaleMapping::mapConsistent(const time::Sample &inData, Eigen:
     PRECICE_ASSERT(_type == MultiscaleType::COLLECT);
     size_t const inSize  = input()->nVertices();
     size_t const outSize = output()->nVertices();
-    if (_dimension == MultiscaleDimension::D1D3) {
-      PRECICE_ASSERT(output()->nVertices() == 1);
-      outputValues(effectiveCoordinate) = 0;
-      for (size_t i = 0; i < inSize; i++) {
-        PRECICE_ASSERT(static_cast<size_t>((i * inDataDimensions) + effectiveCoordinate) < static_cast<size_t>(inputValues.size()),
-                       ((i * inDataDimensions) + effectiveCoordinate), inputValues.size());
-        outputValues(effectiveCoordinate) += inputValues((i * inDataDimensions) + effectiveCoordinate);
-      }
-      outputValues(effectiveCoordinate) = outputValues(effectiveCoordinate) / inSize;
-    } else if (_dimension == MultiscaleDimension::D1D2) {
+    if (_dimension == MultiscaleDimension::D1D2 || _dimension == MultiscaleDimension::D1D3) {
       PRECICE_ASSERT(output()->nVertices() == 1);
       PRECICE_ASSERT(_collectWeights.size() == inSize);
       outputValues(effectiveCoordinate) = 0.0;

@@ -49,9 +49,10 @@ public:
    * @param[in] type Geometric multiscale type of the mapping
    * @param[in] axis Main axis along which axial geometric multiscale coupling happens
    * @param[in] radius Radius of the 1D solver "tube"
-   * @param[in] profile Profile for SPREAD (ignored for COLLECT).
+   * @param[in] profile Profile for SPREAD (ignored for COLLECT)
+   * @param[in] coreRadius Radius of inner core of the mesh.
    */
-  AxialGeoMultiscaleMapping(Constraint constraint, int dimensions, MultiscaleDimension dimension, MultiscaleType type, MultiscaleAxis axis, double radius, SpreadProfile profile = SpreadProfile::UNIFORM);
+  AxialGeoMultiscaleMapping(Constraint constraint, int dimensions, MultiscaleDimension dimension, MultiscaleType type, MultiscaleAxis axis, double radius, SpreadProfile profile = SpreadProfile::UNIFORM, double coreRadius = 0.0);
 
   /// Takes care of compute-heavy operations needed only once to set up the mapping.
   void computeMapping() override;
@@ -89,6 +90,10 @@ private:
 
   /// selected profile used when _type == SPREAD
   SpreadProfile _profile;
+
+  /// Defines the inner-square threshold for 3D collect.
+  /// All nodes with max(|x|,|y|) <= _coreRadius belong to the inner core.
+  double _coreRadius = 0.0;
 
   /// computed vertex distances to map data from input vertex to output vertices
   std::vector<double> _vertexDistances;
