@@ -286,7 +286,7 @@ void AxialGeoMultiscaleMapping::computeMapping()
         // ------------------------------------------------------------
         // 3) Inner region: Cartesian bands → area = Δx * Δy
         // ------------------------------------------------------------
-        const double     EPS_INNER = 1e-1; // same as Python EPS
+        const double     EPS_INNER = 1e-2; // same as Python EPS
         std::vector<int> xLevel(inSize, -1), yLevel(inSize, -1);
         int              nXLevels = 0, nYLevels = 0;
         if (!innerIdx.empty()) {
