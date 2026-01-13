@@ -926,17 +926,25 @@ void AxialGeoMultiscaleMapping::mapConsistent(const time::Sample &inData, Eigen:
     if (_dimension == MultiscaleDimension::D1D3) {
       PRECICE_ASSERT(output()->nVertices() == 1);
       outputValues(effectiveCoordinate) = 0.0;
-      for (size_t i = 0; i < inSize; i++) {
-        PRECICE_ASSERT(static_cast<size_t>((i * inDataDimensions) + effectiveCoordinate) < static_cast<size_t>(inputValues.size()),
-                       ((i * inDataDimensions) + effectiveCoordinate), inputValues.size());
-        outputValues(effectiveCoordinate) +=
-            inputValues((i * inDataDimensions) + effectiveCoordinate);
+      if (_crossSection == MultiscaleCrossSection::CIRCLE) {
+        PRECICE_ASSERT(_collectWeights.size() == inSize);
+        for (size_t i = 0; i < inSize; ++i) {
+          PRECICE_ASSERT(static_cast<size_t>((i * inDataDimensions) + effectiveCoordinate) < static_cast<size_t>(inputValues.size()),
+                         ((i * inDataDimensions) + effectiveCoordinate), inputValues.size());
+          outputValues(effectiveCoordinate) +=
+              _collectWeights[i] * inputValues((i * inDataDimensions) + effectiveCoordinate);
+        }
+      } else if (_crossSection == MultiscaleCrossSection::SQUARE) {
+        for (size_t i = 0; i < inSize; ++i) {
+          PRECICE_ASSERT(static_cast<size_t>((i * inDataDimensions) + effectiveCoordinate) < static_cast<size_t>(inputValues.size()),
+                         ((i * inDataDimensions) + effectiveCoordinate), inputValues.size());
+          outputValues(effectiveCoordinate) +=
+              inputValues((i * inDataDimensions) + effectiveCoordinate);
+        }
+        outputValues(effectiveCoordinate) /= static_cast<double>(inSize);
       }
-      outputValues(effectiveCoordinate) = outputValues(effectiveCoordinate) / inSize;
-
     } else if (_dimension == MultiscaleDimension::D1D2) {
       PRECICE_ASSERT(output()->nVertices() == 1);
-
       outputValues(effectiveCoordinate) = 0.0;
       for (size_t i = 0; i < inSize; ++i) {
         PRECICE_ASSERT(static_cast<size_t>((i * inDataDimensions) + effectiveCoordinate) < static_cast<size_t>(inputValues.size()),
