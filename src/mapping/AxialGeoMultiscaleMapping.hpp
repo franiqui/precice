@@ -116,6 +116,9 @@ private:
 
   // Maximum distance of output vertices to each input vertex
   std::vector<double> _maxDistancePerInput;
+
+  // Weights for weighted collect (must sum to 1.0)
+  std::vector<double> _collectWeights;
 };
 
 } // namespace precice::mapping

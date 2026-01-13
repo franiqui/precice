@@ -149,6 +149,75 @@ void AxialGeoMultiscaleMapping::computeMapping()
       } else if (_dimension == MultiscaleDimension::D1D2) {
         PRECICE_CHECK(output()->nVertices() == 1,
                       "You can only define an axial geometric multiscale 1D-2D mapping of type collect to a mesh with exactly one vertex.");
+        _collectWeights.clear();
+        _collectWeights.resize(inSize, 0.0);
+
+        if (inSize == 1) {
+          _collectWeights[0] = 1.0;
+        } else {
+          std::vector<Eigen::VectorXd> coords(inSize);
+          for (size_t i = 0; i < inSize; ++i) {
+            coords[i] = input()->vertex(i).getCoords();
+          }
+
+          int             dim      = coords[0].size();
+          Eigen::VectorXd minCoord = coords[0];
+          Eigen::VectorXd maxCoord = coords[0];
+          for (size_t i = 1; i < inSize; ++i) {
+            minCoord = minCoord.cwiseMin(coords[i]);
+            maxCoord = maxCoord.cwiseMax(coords[i]);
+          }
+
+          int    mainDir = 0;
+          double maxSpan = std::abs(maxCoord[0] - minCoord[0]);
+          for (int d = 1; d < dim; ++d) {
+            double span = std::abs(maxCoord[d] - minCoord[d]);
+            if (span > maxSpan) {
+              maxSpan = span;
+              mainDir = d;
+            }
+          }
+
+          std::vector<size_t> indices(inSize);
+          for (size_t i = 0; i < inSize; ++i) {
+            indices[i] = i;
+          }
+          std::sort(indices.begin(), indices.end(),
+                    [&](size_t a, size_t b) {
+                      return coords[a][mainDir] < coords[b][mainDir];
+                    });
+
+          std::vector<double> s(inSize);
+          for (size_t k = 0; k < inSize; ++k) {
+            s[k] = coords[indices[k]][mainDir];
+          }
+
+          std::vector<double> localWeights(inSize, 0.0);
+          localWeights[0] = 0.5 * (s[1] - s[0]);
+          for (size_t k = 1; k < inSize - 1; ++k) {
+            localWeights[k] = 0.5 * (s[k + 1] - s[k - 1]);
+          }
+          localWeights[inSize - 1] = 0.5 * (s[inSize - 1] - s[inSize - 2]);
+
+          double totalLength = 0.0;
+          for (size_t k = 0; k < inSize; ++k) {
+            size_t originalIdx           = indices[k];
+            double w                     = std::max(localWeights[k], 0.0);
+            _collectWeights[originalIdx] = w;
+            totalLength += w;
+          }
+
+          if (totalLength > 0.0) {
+            for (size_t i = 0; i < inSize; ++i) {
+              _collectWeights[i] /= totalLength;
+            }
+          } else {
+            double w = 1.0 / static_cast<double>(inSize);
+            for (size_t i = 0; i < inSize; ++i) {
+              _collectWeights[i] = w;
+            }
+          }
+        }
       } else {
         PRECICE_ASSERT(_dimension == MultiscaleDimension::D2D3);
         PRECICE_CHECK(outSize > 1, "You can only define an axial geometric multiscale 2D-3D mapping of type collect to a mesh with more than 1 vertex.");
@@ -322,16 +391,15 @@ void AxialGeoMultiscaleMapping::mapConsistent(const time::Sample &inData, Eigen:
 
     } else if (_dimension == MultiscaleDimension::D1D2) {
       PRECICE_ASSERT(output()->nVertices() == 1);
+      PRECICE_ASSERT(_collectWeights.size() == inSize);
 
       outputValues(effectiveCoordinate) = 0.0;
       for (size_t i = 0; i < inSize; ++i) {
         PRECICE_ASSERT(static_cast<size_t>((i * inDataDimensions) + effectiveCoordinate) < static_cast<size_t>(inputValues.size()),
                        ((i * inDataDimensions) + effectiveCoordinate), inputValues.size());
         outputValues(effectiveCoordinate) +=
-            inputValues((i * inDataDimensions) + effectiveCoordinate);
+            _collectWeights[i] * inputValues((i * inDataDimensions) + effectiveCoordinate);
       }
-      outputValues(effectiveCoordinate) = outputValues(effectiveCoordinate) / inSize;
-
     } else {
       PRECICE_ASSERT(_dimension == MultiscaleDimension::D2D3);
       PRECICE_ASSERT(_collectBands.size() == output()->nVertices());
