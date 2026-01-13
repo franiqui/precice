@@ -198,6 +198,7 @@ private:
   const std::string ATTR_GEOMETRIC_MULTISCALE_RADIUS          = "multiscale-radius";
   const std::string ATTR_GEOMETRIC_MULTISCALE_SPREAD_PROFILE  = "multiscale-spread-profile";
   const std::string ATTR_GEOMETRIC_MULTISCALE_CROSS_SECTION   = "multiscale-cross-section";
+  const std::string ATTR_GEOMETRIC_MULTISCALE_CORE_RADIUS     = "multiscale-core-radius";
   const std::string GEOMETRIC_MULTISCALE_DIMENSION_1D3D       = "1d-3d";
   const std::string GEOMETRIC_MULTISCALE_DIMENSION_1D2D       = "1d-2d";
   const std::string GEOMETRIC_MULTISCALE_DIMENSION_2D3D       = "2d-3d";
@@ -276,7 +277,8 @@ private:
       const std::string &geoMultiscaleAxis,
       const double      &multiscaleRadius,
       const std::string &spreadProfile,
-      const std::string &multiscaleCrossSection) const;
+      const std::string &multiscaleCrossSection,
+      const double      &multiscaleCoreRadius) const;
 
   /**
    * Stores additional information about the requested RBF mapping such as the

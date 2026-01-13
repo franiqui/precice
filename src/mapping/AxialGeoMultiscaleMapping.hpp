@@ -56,8 +56,9 @@ public:
    *            - For crossSection == SQUARE: half side length of the square interface (side = 2*R)
    * @param[in] profile Profile for SPREAD (ignored for COLLECT).
    * @param[in] crossSection Shape of the interface cross-section (default: circle).
+   * @param[in] coreRadius Radius of inner core of the mesh.
    */
-  AxialGeoMultiscaleMapping(Constraint constraint, int dimensions, MultiscaleDimension dimension, MultiscaleType type, MultiscaleAxis axis, double radius, SpreadProfile profile = SpreadProfile::UNIFORM, MultiscaleCrossSection crossSection = MultiscaleCrossSection::CIRCLE);
+  AxialGeoMultiscaleMapping(Constraint constraint, int dimensions, MultiscaleDimension dimension, MultiscaleType type, MultiscaleAxis axis, double radius, SpreadProfile profile = SpreadProfile::UNIFORM, MultiscaleCrossSection crossSection = MultiscaleCrossSection::CIRCLE, double coreRadius = 0.0);
 
   /// Takes care of compute-heavy operations needed only once to set up the mapping.
   void computeMapping() override;
@@ -99,6 +100,10 @@ private:
   // cross-section of the pipe
   MultiscaleCrossSection _crossSection;
 
+  /// Defines the inner-square threshold for 3D collect.
+  /// All nodes with max(|x|,|y|) <= _coreRadius belong to the inner core.
+  double _coreRadius = 0.0;
+
   /// computed vertex distances to map data from input vertex to output vertices
   std::vector<double> _vertexDistances;
 
@@ -116,6 +121,9 @@ private:
 
   // Maximum distance of output vertices to each input vertex
   std::vector<double> _maxDistancePerInput;
+
+  // Geometry-based weights for consistent COLLECT
+  std::vector<double> _collectWeights;
 };
 
 } // namespace precice::mapping

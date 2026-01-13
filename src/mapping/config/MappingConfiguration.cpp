@@ -259,13 +259,17 @@ MappingConfiguration::MappingConfiguration(
                                            .setOptions({GEOMETRIC_MULTISCALE_CROSS_SECTION_CIRCLE, GEOMETRIC_MULTISCALE_CROSS_SECTION_SQUARE})
                                            .setDefaultValue(GEOMETRIC_MULTISCALE_CROSS_SECTION_CIRCLE);
 
+  auto attrGeoMultiscaleCoreRadius = XMLAttribute<double>(ATTR_GEOMETRIC_MULTISCALE_CORE_RADIUS)
+                                         .setDocumentation("Threshold defining the inner core region. Nodes with max(|x|,|y|) ≤ coreRadius are treated as part of the inner Cartesian band.")
+                                         .setDefaultValue(0.0);
+
   // Add the relevant attributes to the relevant tags
   addAttributes(projectionTags, {attrFromMesh, attrToMesh, attrDirection, attrConstraint});
   addAttributes(rbfDirectTags, {attrFromMesh, attrToMesh, attrDirection, attrConstraint, attrPolynomial, attrXDead, attrYDead, attrZDead});
   addAttributes(rbfIterativeTags, {attrFromMesh, attrToMesh, attrDirection, attrConstraint, attrPolynomial, attrXDead, attrYDead, attrZDead, attrSolverRtol});
   addAttributes(pumDirectTags, {attrFromMesh, attrToMesh, attrDirection, attrConstraint, attrPumPolynomial, verticesPerCluster, relativeOverlap, projectToInput});
   addAttributes(rbfAliasTag, {attrFromMesh, attrToMesh, attrDirection, attrConstraint, attrXDead, attrYDead, attrZDead});
-  addAttributes(geoMultiscaleTags, {attrFromMesh, attrToMesh, attrDirection, attrConstraint, attrGeoMultiscaleDimension, attrGeoMultiscaleType, attrGeoMultiscaleAxis, attrGeoMultiscaleRadius, attrGeoMultiscaleSpreadProfile, attrGeoMultiscaleCrossSection});
+  addAttributes(geoMultiscaleTags, {attrFromMesh, attrToMesh, attrDirection, attrConstraint, attrGeoMultiscaleDimension, attrGeoMultiscaleType, attrGeoMultiscaleAxis, attrGeoMultiscaleRadius, attrGeoMultiscaleSpreadProfile, attrGeoMultiscaleCrossSection, attrGeoMultiscaleCoreRadius});
 
   // Now we take care of the subtag executor. We repeat some of the subtags in order to add individual documentation
   XMLTag::Occurrence once = XMLTag::OCCUR_NOT_OR_ONCE;
@@ -423,6 +427,7 @@ void MappingConfiguration::xmlTagCallback(
     double      multiscaleRadius       = tag.getDoubleAttributeValue(ATTR_GEOMETRIC_MULTISCALE_RADIUS, 1.0);
     std::string spreadProfileStr       = tag.getStringAttributeValue(ATTR_GEOMETRIC_MULTISCALE_SPREAD_PROFILE, "");
     std::string multiscaleCrossSection = tag.getStringAttributeValue(ATTR_GEOMETRIC_MULTISCALE_CROSS_SECTION, "");
+    double      multiscaleCoreRadius   = tag.getDoubleAttributeValue(ATTR_GEOMETRIC_MULTISCALE_CORE_RADIUS, 0.0);
 
     if (type == TYPE_AXIAL_GEOMETRIC_MULTISCALE || type == TYPE_RADIAL_GEOMETRIC_MULTISCALE) {
       PRECICE_CHECK(_experimental, "Axial geometric multiscale is experimental and the configuration can change between minor releases. Set experimental=\"on\" in the precice-configuration tag.");
@@ -454,7 +459,7 @@ void MappingConfiguration::xmlTagCallback(
       PRECICE_UNREACHABLE("Unknown mapping constraint \"{}\".", constraint);
     }
 
-    ConfiguredMapping configuredMapping = createMapping(dir, type, fromMesh, toMesh, geoMultiscaleDimension, geoMultiscaleType, geoMultiscaleAxis, multiscaleRadius, spreadProfileStr, multiscaleCrossSection);
+    ConfiguredMapping configuredMapping = createMapping(dir, type, fromMesh, toMesh, geoMultiscaleDimension, geoMultiscaleType, geoMultiscaleAxis, multiscaleRadius, spreadProfileStr, multiscaleCrossSection, multiscaleCoreRadius);
 
     _rbfConfig = configureRBFMapping(type, strPolynomial, xDead, yDead, zDead, solverRtol, verticesPerCluster, relativeOverlap, projectToInput);
 
@@ -563,7 +568,8 @@ MappingConfiguration::ConfiguredMapping MappingConfiguration::createMapping(
     const std::string &geoMultiscaleAxis,
     const double      &multiscaleRadius,
     const std::string &spreadProfileStr,
-    const std::string &multiscaleCrossSection) const
+    const std::string &multiscaleCrossSection,
+    const double      &multiscaleCoreRadius) const
 {
   PRECICE_TRACE(direction, type);
 
@@ -693,7 +699,7 @@ MappingConfiguration::ConfiguredMapping MappingConfiguration::createMapping(
       PRECICE_UNREACHABLE("Unknown geometric cross section \"{}\".", multiscaleCrossSection);
     }
 
-    configuredMapping.mapping = PtrMapping(new AxialGeoMultiscaleMapping(constraintValue, fromMesh->getDimensions(), multiscaleDimension, multiscaleType, multiscaleAxis, multiscaleRadius, spreadProfile, crossSection));
+    configuredMapping.mapping = PtrMapping(new AxialGeoMultiscaleMapping(constraintValue, fromMesh->getDimensions(), multiscaleDimension, multiscaleType, multiscaleAxis, multiscaleRadius, spreadProfile, crossSection, multiscaleCoreRadius));
 
   } else if (type == TYPE_RADIAL_GEOMETRIC_MULTISCALE) {
 
