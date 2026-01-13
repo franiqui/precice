@@ -51,7 +51,7 @@ public:
    * @param[in] dimension Dimensionality pairing of the mapping
    * @param[in] type Geometric multiscale type of the mapping
    * @param[in] axis Main axis along which axial geometric multiscale coupling happens
-   * @param[in] radius Radius of the 1D solver "tube"
+   * @param[in] radius Radius of the 2D or 3D solver "tube"
    *            - For crossSection == CIRCLE: radius of the circular interface (R)
    *            - For crossSection == SQUARE: half side length of the square interface (side = 2*R)
    * @param[in] profile Profile for SPREAD (ignored for COLLECT).
