@@ -5,19 +5,21 @@
 namespace precice::mapping {
 
 AxialGeoMultiscaleMapping::AxialGeoMultiscaleMapping(
-    Constraint          constraint,
-    int                 dimensions,
-    MultiscaleDimension dimension,
-    MultiscaleType      type,
-    MultiscaleAxis      axis,
-    double              radius,
-    SpreadProfile       profile)
+    Constraint             constraint,
+    int                    dimensions,
+    MultiscaleDimension    dimension,
+    MultiscaleType         type,
+    MultiscaleAxis         axis,
+    double                 radius,
+    SpreadProfile          profile,
+    MultiscaleCrossSection crossSection)
     : Mapping(constraint, dimensions, false, Mapping::InitialGuessRequirement::None),
       _dimension(dimension),
       _type(type),
       _axis(axis),
       _radius(radius),
-      _profile(profile)
+      _profile(profile),
+      _crossSection(crossSection)
 {
   setInputRequirement(Mapping::MeshRequirement::VERTEX);
   setOutputRequirement(Mapping::MeshRequirement::VERTEX);
@@ -57,21 +59,59 @@ void AxialGeoMultiscaleMapping::computeMapping()
         // compute distances between 1D vertex and 3D vertices
         mesh::Vertex    &v0                           = input()->vertex(0);
         constexpr double distance_to_radius_threshold = 1.05;
+        if (_crossSection == MultiscaleCrossSection::CIRCLE) {
+          _vertexDistances.clear();
+          _vertexDistances.reserve(output()->nVertices());
 
-        _vertexDistances.clear();
-        _vertexDistances.reserve(output()->nVertices());
+          for (size_t i = 0; i < outSize; i++) {
+            Eigen::VectorXd difference(outDataDimensions);
+            difference = v0.getCoords();
+            difference -= output()->vertex(i).getCoords();
+            double distance_to_radius = difference.norm() / _radius;
+            PRECICE_CHECK(distance_to_radius <= distance_to_radius_threshold, "Output mesh has vertices that do not coincide with the geometric multiscale interface defined by the input mesh. Ratio of vertex distance to radius is {} (which is larger than the assumed threshold of distance_to_radius_threshold).", distance_to_radius);
+            _vertexDistances.push_back(distance_to_radius);
+          }
+        } else {
+          PRECICE_ASSERT(_crossSection == MultiscaleCrossSection::SQUARE);
+          _vertexTransverseCoords.clear();
+          _vertexTransverseCoords.reserve(output()->nVertices());
 
-        for (size_t i = 0; i < outSize; i++) {
-          Eigen::VectorXd difference(outDataDimensions);
-          difference = v0.getCoords();
-          difference -= output()->vertex(i).getCoords();
-          double distance_to_radius = difference.norm() / _radius;
-          PRECICE_CHECK(distance_to_radius <= distance_to_radius_threshold, "Output mesh has vertices that do not coincide with the geometric multiscale interface defined by the input mesh. Ratio of vertex distance to radius is {} (which is larger than the assumed threshold of distance_to_radius_threshold).", distance_to_radius);
-          _vertexDistances.push_back(distance_to_radius);
+          const int t1 = (effectiveCoordinate + 1) % 3;
+          const int t2 = (effectiveCoordinate + 2) % 3;
+
+          for (size_t i = 0; i < outSize; i++) {
+            Eigen::VectorXd difference(outDataDimensions);
+            difference = v0.getCoords();
+            difference -= output()->vertex(i).getCoords();
+
+            const double s1 = difference[t1] / _radius;
+            const double s2 = difference[t2] / _radius;
+
+            const double squareNorm = std::max(std::abs(s1), std::abs(s2));
+            PRECICE_CHECK(squareNorm <= distance_to_radius_threshold,
+                          "Output mesh has vertices that do not coincide with the square multiscale interface defined by the input mesh. "
+                          "max(|xn|,|yn|) is {} (threshold {}).",
+                          squareNorm, distance_to_radius_threshold);
+            _vertexTransverseCoords.push_back({s1, s2});
+          }
         }
+
       } else {
         PRECICE_ASSERT(_dimension == MultiscaleDimension::D2D3);
         PRECICE_CHECK(input()->nVertices() > 1, "You can only define an axial geometric multiscale 2D-3D mapping of type spread from a mesh with more than 1 vertex.");
+        Eigen::Vector3d minC = input()->vertex(0).getCoords().head<3>();
+        Eigen::Vector3d maxC = minC;
+        for (size_t i = 1; i < input()->nVertices(); ++i) {
+          const Eigen::Vector3d c = input()->vertex(i).getCoords().head<3>();
+          minC                    = minC.cwiseMin(c);
+          maxC                    = maxC.cwiseMax(c);
+        }
+        const Eigen::Vector3d span = maxC - minC;
+        _lineCoord                 = 0;
+        if (span[1] > span[_lineCoord])
+          _lineCoord = 1;
+        if (span[2] > span[_lineCoord])
+          _lineCoord = 2;
         _nearestVertex.clear();
         _nearestVertex.reserve(output()->nVertices());
         _vertexDistances.clear();
@@ -198,6 +238,19 @@ void AxialGeoMultiscaleMapping::computeMapping()
       } else {
         PRECICE_ASSERT(_dimension == MultiscaleDimension::D2D3);
         PRECICE_CHECK(outSize > 1, "You can only define an axial geometric multiscale 2D-3D mapping of type collect to a mesh with more than 1 vertex.");
+        Eigen::Vector3d minC = output()->vertex(0).getCoords().head<3>();
+        Eigen::Vector3d maxC = minC;
+        for (size_t i = 1; i < output()->nVertices(); ++i) {
+          const Eigen::Vector3d c = output()->vertex(i).getCoords().head<3>();
+          minC                    = minC.cwiseMin(c);
+          maxC                    = maxC.cwiseMax(c);
+        }
+        const Eigen::Vector3d span = maxC - minC;
+        _lineCoord                 = 0;
+        if (span[1] > span[_lineCoord])
+          _lineCoord = 1;
+        if (span[2] > span[_lineCoord])
+          _lineCoord = 2;
         _collectBands.clear();
         _collectBands.resize(output()->nVertices());
         for (size_t i = 0; i < inSize; i++) {
@@ -282,9 +335,29 @@ void AxialGeoMultiscaleMapping::mapConsistent(const time::Sample &inData, Eigen:
       for (size_t i = 0; i < outSize; i++) {
         PRECICE_ASSERT(static_cast<size_t>((i * outDataDimensions) + effectiveCoordinate) < static_cast<size_t>(outputValues.size()), ((i * outDataDimensions) + effectiveCoordinate), outputValues.size());
         if (_profile == SpreadProfile::PARABOLIC) {
-          // When adding support for 2D, remember that this should be 1.5 * inputValues(effectiveCoordinate) * (1 - (_vertexDistances[i] * _vertexDistances[i]));
-          const double factor                                         = (_dimension == MultiscaleDimension::D1D3) ? 2.0 : 1.5;
-          outputValues((i * outDataDimensions) + effectiveCoordinate) = factor * inputValues(effectiveCoordinate) * (1 - (_vertexDistances[i] * _vertexDistances[i]));
+          if (_dimension == MultiscaleDimension::D1D2) {
+            constexpr double factor                                     = 1.5;
+            outputValues((i * outDataDimensions) + effectiveCoordinate) = factor * inputValues(effectiveCoordinate) * (1 - (_vertexDistances[i] * _vertexDistances[i]));
+          } else {
+            if (_crossSection == MultiscaleCrossSection::CIRCLE) {
+              constexpr double factor                                     = 2.0;
+              outputValues((i * outDataDimensions) + effectiveCoordinate) = factor * inputValues(effectiveCoordinate) * (1 - (_vertexDistances[i] * _vertexDistances[i]));
+            } else if (_crossSection == MultiscaleCrossSection::SQUARE) {
+              const double s1 = _vertexTransverseCoords[i][0];
+              const double s2 = _vertexTransverseCoords[i][1];
+
+              constexpr double factor = 2.094;
+              constexpr double m      = 0.879;
+              const double     b1raw  = 1.0 - s1 * s1;
+              const double     b2raw  = 1.0 - s2 * s2;
+              // For negative exponent (m-1), base must be > 0
+              const double b1 = std::max(0.0, b1raw);
+
+              // For positive exponent m, base must be >= 0
+              const double b2                                             = std::max(0.0, b2raw);
+              outputValues((i * outDataDimensions) + effectiveCoordinate) = factor * inputValues(effectiveCoordinate) * std::pow(b1, m) * std::pow(b2, m);
+            }
+          }
         } else if (_profile == SpreadProfile::UNIFORM) {
           outputValues((i * outDataDimensions) + effectiveCoordinate) = inputValues(effectiveCoordinate);
         }
@@ -302,8 +375,26 @@ void AxialGeoMultiscaleMapping::mapConsistent(const time::Sample &inData, Eigen:
         if (_profile == SpreadProfile::UNIFORM) {
           outputValues((i * outDataDimensions) + effectiveCoordinate) = inputValues((static_cast<size_t>(_nearestVertex[i]) * inDataDimensions) + effectiveCoordinate);
         } else if (_profile == SpreadProfile::PARABOLIC) {
-          double r_hat                                                = _vertexDistances[i] / R;
-          outputValues((i * outDataDimensions) + effectiveCoordinate) = (4.0 / 3.0) * inputValues((static_cast<size_t>(_nearestVertex[i]) * inDataDimensions) + effectiveCoordinate) * (1.0 - r_hat * r_hat);
+          if (_crossSection == MultiscaleCrossSection::CIRCLE) {
+            double r_hat                                                = _vertexDistances[i] / R;
+            outputValues((i * outDataDimensions) + effectiveCoordinate) = (4.0 / 3.0) * inputValues((static_cast<size_t>(_nearestVertex[i]) * inDataDimensions) + effectiveCoordinate) * (1.0 - r_hat * r_hat);
+          } else if (_crossSection == MultiscaleCrossSection::SQUARE) {
+            constexpr double umax_over_umean = 2.094;
+            constexpr double line_factor     = 1.5;
+            constexpr double m               = 0.879;
+            constexpr double eps             = 1e-12;
+            const size_t     inIdx           = static_cast<size_t>(_nearestVertex[i]);
+            const double     s1              = input()->vertex(inIdx).getCoords()[_lineCoord] / _radius;
+            const double     s2              = _vertexDistances[i] / _radius;
+            const double     b1raw           = 1.0 - s1 * s1;
+            const double     b2raw           = 1.0 - s2 * s2;
+            // For negative exponent (m-1), base must be > 0
+            const double b1 = std::max(eps, b1raw);
+
+            // For positive exponent m, base must be >= 0
+            const double b2                                             = std::max(0.0, b2raw);
+            outputValues((i * outDataDimensions) + effectiveCoordinate) = inputValues((inIdx * inDataDimensions) + effectiveCoordinate) * (umax_over_umean / line_factor) * std::pow(b1, m - 1.0) * std::pow(b2, m);
+          }
         }
       }
     }
@@ -347,8 +438,15 @@ void AxialGeoMultiscaleMapping::mapConsistent(const time::Sample &inData, Eigen:
         }
         outputValues((j * outDataDimensions) + effectiveCoordinate) = outputValues((j * outDataDimensions) + effectiveCoordinate) / static_cast<double>(_collectBands[j].size());
 
-        if (outDataDimensions > 1 && _profile == SpreadProfile::PARABOLIC) {
-          outputValues((j * outDataDimensions) + effectiveCoordinate) *= 9.0 / 8.0;
+        if (_profile == SpreadProfile::PARABOLIC) {
+          if (_crossSection == MultiscaleCrossSection::CIRCLE) {
+            outputValues((j * outDataDimensions) + effectiveCoordinate) *= 9.0 / 8.0;
+          } else if (_crossSection == MultiscaleCrossSection::SQUARE) {
+            const double s1    = output()->vertex(j).getCoords()[_lineCoord] / _radius;
+            const double b1raw = 1.0 - s1 * s1;
+            const double b1    = std::max(0.0, b1raw);
+            outputValues((j * outDataDimensions) + effectiveCoordinate) *= 1.03745 * std::pow(b1, 0.121);
+          }
         }
       }
     }

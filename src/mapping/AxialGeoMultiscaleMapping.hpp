@@ -39,7 +39,10 @@ public:
     D1D2,
     D2D3
   };
-
+  enum struct MultiscaleCrossSection {
+    CIRCLE,
+    SQUARE
+  };
   /**
    * @brief Constructor.
    *
@@ -49,9 +52,12 @@ public:
    * @param[in] type Geometric multiscale type of the mapping
    * @param[in] axis Main axis along which axial geometric multiscale coupling happens
    * @param[in] radius Radius of the 1D solver "tube"
+   *            - For crossSection == CIRCLE: radius of the circular interface (R)
+   *            - For crossSection == SQUARE: half side length of the square interface (side = 2*R)
    * @param[in] profile Profile for SPREAD (ignored for COLLECT).
+   * @param[in] crossSection Shape of the interface cross-section (default: circle).
    */
-  AxialGeoMultiscaleMapping(Constraint constraint, int dimensions, MultiscaleDimension dimension, MultiscaleType type, MultiscaleAxis axis, double radius, SpreadProfile profile = SpreadProfile::UNIFORM);
+  AxialGeoMultiscaleMapping(Constraint constraint, int dimensions, MultiscaleDimension dimension, MultiscaleType type, MultiscaleAxis axis, double radius, SpreadProfile profile = SpreadProfile::UNIFORM, MultiscaleCrossSection crossSection = MultiscaleCrossSection::CIRCLE);
 
   /// Takes care of compute-heavy operations needed only once to set up the mapping.
   void computeMapping() override;
@@ -90,8 +96,17 @@ private:
   /// selected profile used when _type == SPREAD
   SpreadProfile _profile;
 
+  // cross-section of the pipe
+  MultiscaleCrossSection _crossSection;
+
   /// computed vertex distances to map data from input vertex to output vertices
   std::vector<double> _vertexDistances;
+
+  /// computed normalized transverse coordinates of oputput vertices for squared cross-section
+  std::vector<Eigen::Vector2d> _vertexTransverseCoords;
+
+  // Axis of 2D interface line
+  int _lineCoord = -1;
 
   // nearest input vertex to output vertices
   std::vector<int> _nearestVertex;
